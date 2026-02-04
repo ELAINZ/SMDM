@@ -92,7 +92,8 @@ if __name__ == "__main__":
     set_seed(1234)
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-    model_name = f"Diff_LLaMA_1028M"
+    model_name = f"Diff_LLaMA_551M"
+    # model_name = f"Diff_LLaMA_1028M"
     config = Config.from_name(model_name)
     tokenizer = AutoTokenizer.from_pretrained('TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T',
                                               padding_side="right", use_fast=True)
@@ -100,7 +101,9 @@ if __name__ == "__main__":
     tokenizer.pad_token_id = 32000
 
     model = TransEncoder(config).to(device)
-    model.load_state_dict(load_file(args.ckpt_path))
+    # model.load_state_dict(load_file(args.ckpt_path))
+    ckpt = torch.load(args.ckpt_path, map_location="cpu")
+    model.load_state_dict(ckpt["model"])
 
     acc = 0
     num = 0

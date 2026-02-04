@@ -107,8 +107,8 @@ def diff_sample(model, tokenizer, prompt=None, batch_size=1, alg='origin', steps
             x0[transfer_index_t_s] = torch.argmax(logits_with_noise, dim=-1)
             x[mask_index] = x0.clone()
         elif alg == 'greddy':
-            logits_with_noise = add_gumbel_noise(logits, temperature=temperature)
-            x0 = torch.argmax(logits_with_noise, dim=-1)
+            # logits_with_noise = add_gumbel_noise(logits, temperature=temperature)
+            x0 = torch.argmax(logits, dim=-1)
 
             logits = logits.to(torch.float64)
             p = F.softmax(logits, dim=-1)

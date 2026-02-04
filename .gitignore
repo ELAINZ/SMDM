@@ -1,0 +1,4 @@
+finetune/
+models/*
+out/*
+__pycache__/*

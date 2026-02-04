@@ -45,14 +45,14 @@ model_name = f'Diff_LLaMA_{args.model}M'  # config
 out_dir = Path('workdir')
 
 # Hyperparameters
-num_of_devices = 8
+num_of_devices = 2
 global_batch_size = int(args.bs / args.nodes_num)
 learning_rate = 2e-4
 micro_batch_size = 16
 max_step = int(769240 * args.epoch / args.bs)
 warmup_steps = int(max_step * 0.01)
 log_step_interval = 10
-save_step_interval = 5000
+save_step_interval = 500
 
 weight_decay = 1e-1
 beta1 = 0.9
@@ -96,7 +96,7 @@ def extract_number(filename):
 
 
 def setup(
-    devices: int = 8,
+    devices: int = 2,
     precision: Optional[str] = None,
     tpu: bool = False,
     resume: Union[bool, Path] = True,
@@ -171,10 +171,16 @@ def main(fabric, pretrain_path, resume):
 
     state = {"model": model, "optimizer": optimizer, "hparams": hparams, "iter_num": 0, "step_count": 0}
 
+    # if resume is True:
+    #     try:
+    #         resume = sorted(out_dir.glob("*.pth"), key=extract_number)[-1]
+    #     except:
+    #         resume = False
     if resume is True:
-        try:
-            resume = sorted(out_dir.glob("*.pth"), key=extract_number)[-1]
-        except:
+        resume_path = out_dir / "latest.pth"
+        if resume_path.exists():
+            resume = resume_path
+        else:
             resume = False
     if resume :
         fabric.print(f"Resuming training from {resume}")
@@ -261,6 +267,16 @@ def train(fabric, state, train_dataloader, monitor, resume):
             loss = loss_func(logits[mask_indices], input_ids[mask_indices]) / p_mask[mask_indices]
             loss = loss.sum() / (input_ids.shape[0] * max_length - prompt_length.sum())
             # loss = chunked_cross_entropy(logits, targets, chunk_size=0)
+            with torch.no_grad():
+                preds = logits[mask_indices].argmax(dim=-1)           # [N]
+                targets = input_ids[mask_indices]                      # [N]
+                correct = (preds == targets).sum()
+                total = targets.numel()
+                correct = fabric.all_reduce(correct, reduce_op="sum")
+                total = fabric.all_reduce(torch.tensor(total, device=fabric.device), reduce_op="sum")
+                acc = (correct.float() / total.float()).item()
+
+            
             fabric.backward(loss / gradient_accumulation_steps)
 
         if not is_accumulating:
@@ -268,6 +284,16 @@ def train(fabric, state, train_dataloader, monitor, resume):
             optimizer.step()
             optimizer.zero_grad()
             state["step_count"] += 1
+
+            if fabric.global_rank == 0:
+                fabric.log_dict(
+                    {
+                        "train/loss": loss.item(),
+                        "train/masked_acc": acc,
+                        "train/lr": optimizer.param_groups[0]["lr"],
+                    },
+                    step=state["step_count"],
+                )
         elif fabric.device.type == "xla":
             xm.mark_step()
         state["iter_num"] += 1
@@ -294,7 +320,8 @@ def train(fabric, state, train_dataloader, monitor, resume):
         )
 
         if not is_accumulating and (state["step_count"] % save_step_interval == 0 or state["step_count"] == max_step):
-            checkpoint_path = out_dir / f"iter-{state['iter_num']:06d}-ckpt.pth"
+            # checkpoint_path = out_dir / f"iter-{state['iter_num']:06d}-ckpt.pth"
+            checkpoint_path = out_dir / "latest.pth"
             fabric.print(f"Saving checkpoint to {str(checkpoint_path)!r}")
             fabric.save(checkpoint_path, state)
 

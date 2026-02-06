@@ -52,7 +52,7 @@ micro_batch_size = 16
 max_step = int(769240 * args.epoch / args.bs)
 warmup_steps = int(max_step * 0.01)
 log_step_interval = 10
-save_step_interval = 500
+save_step_interval = 2000
 
 weight_decay = 1e-1
 beta1 = 0.9

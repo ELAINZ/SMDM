@@ -1,3 +1,5 @@
+import torch
+torch.cuda.set_per_process_memory_fraction(0.875)
 import glob
 import json
 import math
@@ -8,8 +10,6 @@ from pathlib import Path
 from typing import Optional, Tuple, Union
 import math
 import lightning as L
-import torch
-torch.cuda.set_per_process_memory_fraction(0.875)
 from lightning.fabric.strategies import FSDPStrategy, XLAStrategy
 from torch.utils.data import DataLoader
 from functools import partial

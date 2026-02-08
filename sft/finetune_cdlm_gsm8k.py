@@ -90,7 +90,7 @@ def forward_process(batch, total_dim=32000, eps=1e-3, alpha=0.15):
     mask_indices = torch.rand((b, l), device=batch.device) < p_mask
     noisy_batch = torch.where(mask_indices, total_dim, batch)
 
-    visible_indices = ~mask_indices
+    visible_mask = ~mask_indices
     uniform_corruption_mask = (torch.rand((b, l), device=device) < alpha) & visible_mask
     random_tokens = torch.randint(0, total_dim, (b, l), device=device)
     

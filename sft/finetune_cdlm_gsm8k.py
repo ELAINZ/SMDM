@@ -194,7 +194,7 @@ def main(fabric, pretrain_path, resume):
     #     except:
     #         resume = False
     if resume is True:
-        resume_path = out_dir / "latest.pth"
+        resume_path = out_dir / "latest_cdlm.pth"
         if resume_path.exists():
             resume = resume_path
         else:

@@ -1,4 +1,5 @@
 import torch
+from torch.distributed.fsdp import StateDictType
 torch.cuda.set_per_process_memory_fraction(0.875)
 import glob
 import json
@@ -324,8 +325,8 @@ def train(fabric, state, train_dataloader, monitor, resume):
             # checkpoint_path = out_dir / f"iter-{state['iter_num']:06d}-ckpt.pth"
             checkpoint_path = out_dir / "latest.pth"
             fabric.print(f"Saving checkpoint to {str(checkpoint_path)!r}")
-            fabric.save(checkpoint_path, state)
-
+            with fabric.strategy.state_dict_type(StateDictType.SHARDED_STATE_DICT):
+                fabric.save(checkpoint_path, state)
 
 # learning rate decay scheduler (cosine with warmup)
 def get_lr(it):

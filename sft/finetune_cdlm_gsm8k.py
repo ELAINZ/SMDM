@@ -134,7 +134,7 @@ def setup(
         else:
             strategy = FSDPStrategy(
                 auto_wrap_policy={Block},
-                activation_checkpointing_policy={Block},
+                activation_checkpointing_policy=None,
                 state_dict_type="sharded",
                 limit_all_gathers=True,
                 cpu_offload=False,

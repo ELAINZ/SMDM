@@ -351,7 +351,7 @@ def train(fabric, state, train_dataloader, monitor, resume):
 
         if not is_accumulating and (state["step_count"] % save_step_interval == 0 or state["step_count"] == max_step):
             # checkpoint_path = out_dir / f"iter-{state['iter_num']:06d}-ckpt.pth"
-            checkpoint_path = out_dir / "latest.pth"
+            checkpoint_path = out_dir / "latest_cdlm.pth"
             fabric.print(f"Saving checkpoint to {str(checkpoint_path)!r}")
             fabric.save(checkpoint_path, state)
 

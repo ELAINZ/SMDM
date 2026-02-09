@@ -49,7 +49,7 @@ out_dir = Path('workdir')
 num_of_devices = 2
 global_batch_size = int(args.bs / args.nodes_num)
 learning_rate = 2e-4
-micro_batch_size = 16
+micro_batch_size = 8
 max_step = int(769240 * args.epoch / args.bs)
 warmup_steps = int(max_step * 0.01)
 log_step_interval = 10
@@ -83,7 +83,7 @@ def forward_process(batch, total_dim=32000, eps=1e-3, alpha=0.15):
     b, l = batch.shape
     t = torch.rand((b,), device=batch.device)
     device = batch.device
-
+    noisy_batch = batch.clone()
     p_mask = (1 - eps) * t + eps
     p_mask = p_mask[:, None].repeat(1, l)
 
@@ -134,7 +134,7 @@ def setup(
         else:
             strategy = FSDPStrategy(
                 auto_wrap_policy={Block},
-                activation_checkpointing_policy=None,
+                activation_checkpointing_policy={Block},
                 state_dict_type="sharded",
                 limit_all_gathers=True,
                 cpu_offload=False,
@@ -163,7 +163,7 @@ def main(fabric, pretrain_path, resume):
 
     fabric.seed_everything(3407)  # same seed for every process to init model (FSDP)
     train_dataloader = DataLoader(train_set, batch_size=micro_batch_size, shuffle=True, drop_last=True,
-                                      num_workers=8, pin_memory=True, persistent_workers=True)
+                                      num_workers=4, pin_memory=True, persistent_workers=True)
     train_dataloader = fabric.setup_dataloaders(train_dataloader)
 
     fabric.print(f"Loading model with {config.__dict__}")

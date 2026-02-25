@@ -49,7 +49,7 @@ out_dir = Path('workdir')
 num_of_devices = 1
 global_batch_size = int(args.bs / args.nodes_num)
 learning_rate = 2e-4
-micro_batch_size = 32
+micro_batch_size = 64
 max_step = int(769240 * args.epoch / args.bs)
 warmup_steps = int(max_step * 0.01)
 log_step_interval = 10
@@ -63,7 +63,7 @@ decay_lr = True
 min_lr = learning_rate / 10
 
 batch_size = global_batch_size // num_of_devices
-gradient_accumulation_steps = batch_size // micro_batch_size
+gradient_accumulation_steps = batch_size // fabric.set
 assert gradient_accumulation_steps > 0
 warmup_iters = warmup_steps * gradient_accumulation_steps
 
@@ -124,7 +124,11 @@ def setup(
     pretrain_path = args.pretrain_path
     wandb_logger = WandbLogger(name=hp_name, save_dir=out_dir, project='scaling')
 
-    precision = precision or get_default_supported_precision(training=True, tpu=tpu)
+    # precision = precision or get_default_supported_precision(training=True, tpu=tpu)
+    precision = "bf16-mixed"
+
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
 
     if devices > 1:
         if tpu:
@@ -162,8 +166,8 @@ def main(fabric, pretrain_path, resume):
     train_set = preprocess_gsm8k(tokenizer, max_length=256)
 
     fabric.seed_everything(3407)  # same seed for every process to init model (FSDP)
-    train_dataloader = DataLoader(train_set, batch_size=micro_batch_size, shuffle=True, drop_last=True,
-                                      num_workers=4, pin_memory=True, persistent_workers=True)
+    train_dataloader = DataLoader(train_set, batch_size=fabric.set, shuffle=True, drop_last=True,
+                                      num_workers=8, pin_memory=True, persistent_workers=True)
     train_dataloader = fabric.setup_dataloaders(train_dataloader)
 
     fabric.print(f"Loading model with {config.__dict__}")
@@ -179,7 +183,8 @@ def main(fabric, pretrain_path, resume):
     fabric.print(f"Time to instantiate model: {time.perf_counter() - t0:.02f} seconds.")
     fabric.print(f"Total parameters {num_parameters(model):,}")
 
-    model = fabric.setup(model)
+    # model = fabric.setup(model)
+    model = torch.compile(model, mode="max-autotune")
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=learning_rate, weight_decay=weight_decay, betas=(beta1, beta2), foreach=False
     )

@@ -194,7 +194,7 @@ def main(fabric, pretrain_path, resume):
     #     except:
     #         resume = False
     if resume is True:
-        resume_path = out_dir / "latest_cdlm.pth"
+        resume_path = out_dir / "latest_cdlm_05.pth"
         if resume_path.exists():
             resume = resume_path
         else:
@@ -351,7 +351,7 @@ def train(fabric, state, train_dataloader, monitor, resume):
 
         if not is_accumulating and (state["step_count"] % save_step_interval == 0 or state["step_count"] == max_step):
             # checkpoint_path = out_dir / f"iter-{state['iter_num']:06d}-ckpt.pth"
-            checkpoint_path = out_dir / "latest_cdlm_0.5.pth"
+            checkpoint_path = out_dir / "latest_cdlm_05.pth"
             fabric.print(f"Saving checkpoint to {str(checkpoint_path)!r}")
             fabric.save(checkpoint_path, state)
 

@@ -178,7 +178,7 @@ def main(fabric, pretrain_path, resume):
     fabric.print(f"Total parameters {num_parameters(model):,}")
 
     model = fabric.setup(model)
-    model = torch.compile(model, mode="max-autotune")
+    model = torch.compile(model, mode="max-autotune", fullgraph=True, dynamic=False, cudagraphs=False)
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=learning_rate, weight_decay=weight_decay, betas=(beta1, beta2), foreach=False
     )

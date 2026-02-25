@@ -183,7 +183,7 @@ def main(fabric, pretrain_path, resume):
     fabric.print(f"Time to instantiate model: {time.perf_counter() - t0:.02f} seconds.")
     fabric.print(f"Total parameters {num_parameters(model):,}")
 
-    # model = fabric.setup(model)
+    model = fabric.setup(model)
     model = torch.compile(model, mode="max-autotune")
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=learning_rate, weight_decay=weight_decay, betas=(beta1, beta2), foreach=False

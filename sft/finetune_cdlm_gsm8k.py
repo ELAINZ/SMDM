@@ -63,7 +63,7 @@ decay_lr = True
 min_lr = learning_rate / 10
 
 batch_size = global_batch_size // num_of_devices
-gradient_accumulation_steps = batch_size // fabric.set
+gradient_accumulation_steps = batch_size // micro_batch_size
 assert gradient_accumulation_steps > 0
 warmup_iters = warmup_steps * gradient_accumulation_steps
 
@@ -92,15 +92,9 @@ def forward_process(batch, total_dim=32000, eps=1e-3, alpha=0.15):
 
     visible_mask = ~mask_indices
     uniform_corruption_mask = (torch.rand((b, l), device=device) < alpha) & visible_mask
-    random_tokens = torch.randint(0, total_dim, (b, l), device=device)
-    
-    same_token_mask = (random_tokens == batch) & uniform_corruption_mask
-    while same_token_mask.any():
-        random_tokens[same_token_mask] = torch.randint(0, total_dim, 
-                                                        (same_token_mask.sum(),), 
-                                                        device=device)
-        same_token_mask = (random_tokens == batch) & uniform_corruption_mask
-    
+    random_tokens = torch.randint(0, total_dim - 1, (b, l), device=device)
+    random_tokens += (random_tokens >= batch).long()
+        
     # Apply uniform replacement
     noisy_batch = torch.where(uniform_corruption_mask, random_tokens, noisy_batch)
     
@@ -166,7 +160,7 @@ def main(fabric, pretrain_path, resume):
     train_set = preprocess_gsm8k(tokenizer, max_length=256)
 
     fabric.seed_everything(3407)  # same seed for every process to init model (FSDP)
-    train_dataloader = DataLoader(train_set, batch_size=fabric.set, shuffle=True, drop_last=True,
+    train_dataloader = DataLoader(train_set, batch_size=micro_batch_size, shuffle=True, drop_last=True,
                                       num_workers=8, pin_memory=True, persistent_workers=True)
     train_dataloader = fabric.setup_dataloaders(train_dataloader)
 

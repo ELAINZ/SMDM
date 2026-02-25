@@ -46,7 +46,7 @@ model_name = f'Diff_LLaMA_{args.model}M'  # config
 out_dir = Path('workdir')
 
 # Hyperparameters
-num_of_devices = 2
+num_of_devices = 1
 global_batch_size = int(args.bs / args.nodes_num)
 learning_rate = 2e-4
 micro_batch_size = 8
@@ -113,7 +113,7 @@ def extract_number(filename):
 
 
 def setup(
-    devices: int = 2,
+    devices: int = 1,
     precision: Optional[str] = None,
     tpu: bool = False,
     resume: Union[bool, Path] = True,
@@ -272,7 +272,7 @@ def train(fabric, state, train_dataloader, monitor, resume):
         input_ids = input_ids[:, :max_length]
 
         total_dim = 32000
-        alpha = 0.15
+        alpha = 0.50
         noisy_input, p_mask, uniform_corruption_mask = forward_process(input_ids, total_dim=total_dim, alpha=alpha)
         temp_tensor = torch.arange(noisy_input.size(1), device=noisy_input.device).expand(noisy_input.size(0), noisy_input.size(1))
         prompt_index = (temp_tensor < prompt_length.unsqueeze(1))

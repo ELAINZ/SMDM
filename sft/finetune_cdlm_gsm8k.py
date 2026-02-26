@@ -118,11 +118,11 @@ def setup(
     pretrain_path = args.pretrain_path
     wandb_logger = WandbLogger(name=hp_name, save_dir=out_dir, project='scaling')
 
-    # precision = precision or get_default_supported_precision(training=True, tpu=tpu)
-    precision = "bf16-mixed"
+    precision = precision or get_default_supported_precision(training=True, tpu=tpu)
+    # precision = "bf16-mixed"
 
-    torch.backends.cuda.matmul.allow_tf32 = True
-    torch.backends.cudnn.allow_tf32 = True
+    # torch.backends.cuda.matmul.allow_tf32 = True
+    # torch.backends.cudnn.allow_tf32 = True
 
     if devices > 1:
         if tpu:

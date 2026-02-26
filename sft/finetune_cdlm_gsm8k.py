@@ -46,7 +46,7 @@ model_name = f'Diff_LLaMA_{args.model}M'  # config
 out_dir = Path('workdir')
 
 # Hyperparameters
-num_of_devices = 1
+num_of_devices = 2
 global_batch_size = int(args.bs / args.nodes_num)
 learning_rate = 2e-4
 micro_batch_size = 64
@@ -107,7 +107,7 @@ def extract_number(filename):
 
 
 def setup(
-    devices: int = 1,
+    devices: int = 2,
     precision: Optional[str] = None,
     tpu: bool = False,
     resume: Union[bool, Path] = True,

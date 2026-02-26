@@ -193,7 +193,7 @@ def main(fabric, pretrain_path, resume):
     #     except:
     #         resume = False
     if resume is True:
-        resume_path = out_dir / "latest_cdlm_05.pth"
+        resume_path = out_dir / "latest_cdlm_07.pth"
         if resume_path.exists():
             resume = resume_path
         else:
@@ -271,7 +271,7 @@ def train(fabric, state, train_dataloader, monitor, resume):
         input_ids = input_ids[:, :max_length]
 
         total_dim = 32000
-        alpha = 0.50
+        alpha = 0.70
         noisy_input, p_mask, uniform_corruption_mask = forward_process(input_ids, total_dim=total_dim, alpha=alpha)
         temp_tensor = torch.arange(noisy_input.size(1), device=noisy_input.device).expand(noisy_input.size(0), noisy_input.size(1))
         prompt_index = (temp_tensor < prompt_length.unsqueeze(1))
@@ -350,7 +350,7 @@ def train(fabric, state, train_dataloader, monitor, resume):
 
         if not is_accumulating and (state["step_count"] % save_step_interval == 0 or state["step_count"] == max_step):
             # checkpoint_path = out_dir / f"iter-{state['iter_num']:06d}-ckpt.pth"
-            checkpoint_path = out_dir / "latest_cdlm_05.pth"
+            checkpoint_path = out_dir / "latest_cdlm_07.pth"
             fabric.print(f"Saving checkpoint to {str(checkpoint_path)!r}")
             fabric.save(checkpoint_path, state)
 

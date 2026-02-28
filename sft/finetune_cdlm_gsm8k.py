@@ -161,7 +161,7 @@ def main(fabric, pretrain_path, resume):
 
     fabric.seed_everything(3407)  # same seed for every process to init model (FSDP)
     train_dataloader = DataLoader(train_set, batch_size=micro_batch_size, shuffle=True, drop_last=True,
-                                      num_workers=8, pin_memory=True, persistent_workers=True)
+                                      num_workers=16, pin_memory=True, persistent_workers=True)
     train_dataloader = fabric.setup_dataloaders(train_dataloader)
 
     fabric.print(f"Loading model with {config.__dict__}")

@@ -40,14 +40,9 @@ def merge_fsdp_shards(checkpoint_dir, output_path):
     print(f"✅ Succeed! File saved to: {output_path}")
 
 if __name__ == "__main__":
-    import argparse
-    parser = argparse.ArgumentParser(description="Merge FSDP checkpoint shards into a single .pth file.")
-    parser.add_argument("--input", "-i", default="latest.pth", help="Directory containing FSDP shards (e.g. latest_new.pth)")
-    parser.add_argument("--output", "-o", default="latest.pth", help="Output path for merged .pth file")
-    args = parser.parse_args()
-    shard_dir = args.input
-    out_file = args.output
-
+    shard_dir = "latest.pth"
+    out_file = "unified_model.pth"
+    
     if os.path.exists(shard_dir):
         try:
             merge_fsdp_shards(shard_dir, out_file)

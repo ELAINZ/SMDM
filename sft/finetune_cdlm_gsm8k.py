@@ -1,5 +1,4 @@
 import torch
-from torch.distributed.fsdp import StateDictType
 torch.cuda.set_per_process_memory_fraction(0.875)
 import glob
 import json
@@ -50,7 +49,7 @@ out_dir = Path('workdir')
 num_of_devices = 2
 global_batch_size = int(args.bs / args.nodes_num)
 learning_rate = 2e-4
-micro_batch_size = 16
+micro_batch_size = 64
 max_step = int(769240 * args.epoch / args.bs)
 warmup_steps = int(max_step * 0.01)
 log_step_interval = 10
@@ -80,16 +79,26 @@ hparams = {k: v for k, v in locals().items() if isinstance(v, (int, float, str))
 logger = step_csv_logger("out", model_name, flush_logs_every_n_steps=log_iter_interval)
 
 
-def forward_process(batch, total_dim=32000, eps=1e-3):
+def forward_process(batch, total_dim=32000, eps=1e-3, alpha=0.15):
     b, l = batch.shape
     t = torch.rand((b,), device=batch.device)
-
+    device = batch.device
+    noisy_batch = batch.clone()
     p_mask = (1 - eps) * t + eps
     p_mask = p_mask[:, None].repeat(1, l)
 
     mask_indices = torch.rand((b, l), device=batch.device) < p_mask
     noisy_batch = torch.where(mask_indices, total_dim, batch)
-    return noisy_batch, p_mask
+
+    visible_mask = ~mask_indices
+    uniform_corruption_mask = (torch.rand((b, l), device=device) < alpha) & visible_mask
+    random_tokens = torch.randint(0, total_dim - 1, (b, l), device=device)
+    random_tokens += (random_tokens >= batch).long()
+        
+    # Apply uniform replacement
+    noisy_batch = torch.where(uniform_corruption_mask, random_tokens, noisy_batch)
+    
+    return noisy_batch, p_mask, uniform_corruption_mask
 
 
 def extract_number(filename):
@@ -110,6 +119,10 @@ def setup(
     wandb_logger = WandbLogger(name=hp_name, save_dir=out_dir, project='scaling')
 
     precision = precision or get_default_supported_precision(training=True, tpu=tpu)
+    # precision = "bf16-mixed"
+
+    # torch.backends.cuda.matmul.allow_tf32 = True
+    # torch.backends.cudnn.allow_tf32 = True
 
     if devices > 1:
         if tpu:
@@ -165,6 +178,7 @@ def main(fabric, pretrain_path, resume):
     fabric.print(f"Total parameters {num_parameters(model):,}")
 
     model = fabric.setup(model)
+    # model = torch.compile(model, mode="max-autotune", fullgraph=True, dynamic=False, cudagraphs=False)
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=learning_rate, weight_decay=weight_decay, betas=(beta1, beta2), foreach=False
     )
@@ -179,7 +193,7 @@ def main(fabric, pretrain_path, resume):
     #     except:
     #         resume = False
     if resume is True:
-        resume_path = out_dir / "latest.pth"
+        resume_path = out_dir / "latest_cdlm_07.pth"
         if resume_path.exists():
             resume = resume_path
         else:
@@ -257,17 +271,30 @@ def train(fabric, state, train_dataloader, monitor, resume):
         input_ids = input_ids[:, :max_length]
 
         total_dim = 32000
-        noisy_input, p_mask = forward_process(input_ids, total_dim=total_dim)
+        alpha = 0.70
+        noisy_input, p_mask, uniform_corruption_mask = forward_process(input_ids, total_dim=total_dim, alpha=alpha)
         temp_tensor = torch.arange(noisy_input.size(1), device=noisy_input.device).expand(noisy_input.size(0), noisy_input.size(1))
         prompt_index = (temp_tensor < prompt_length.unsqueeze(1))
         noisy_input[prompt_index] = input_ids[prompt_index].clone()
+        uniform_corruption_mask[prompt_index] = False
         mask_indices = (noisy_input == total_dim)
 
         is_accumulating = (state["iter_num"] + 1) % gradient_accumulation_steps != 0
         with fabric.no_backward_sync(model, enabled=is_accumulating):
             logits = model(noisy_input)
-            loss = loss_func(logits[mask_indices], input_ids[mask_indices]) / p_mask[mask_indices]
-            loss = loss.sum() / (input_ids.shape[0] * max_length - prompt_length.sum())
+            loss_masked = loss_func(logits[mask_indices], input_ids[mask_indices]) / p_mask[mask_indices]
+            loss_masked = loss_masked.sum()
+            lambda_noise = 1.0
+            if uniform_corruption_mask.any():
+              loss_noise = loss_func(logits[uniform_corruption_mask], input_ids[uniform_corruption_mask])
+              loss_noise = loss_noise.sum()
+            else:
+              loss_noise = 0.0
+
+            n_masked = mask_indices.sum()
+            n_corrupted_visible = uniform_corruption_mask.sum()
+            loss = (loss_masked / n_masked.clamp(min=1) + 
+                    lambda_noise * loss_noise / n_corrupted_visible.clamp(min=1))
             # loss = chunked_cross_entropy(logits, targets, chunk_size=0)
             with torch.no_grad():
                 preds = logits[mask_indices].argmax(dim=-1)           # [N]
@@ -323,10 +350,10 @@ def train(fabric, state, train_dataloader, monitor, resume):
 
         if not is_accumulating and (state["step_count"] % save_step_interval == 0 or state["step_count"] == max_step):
             # checkpoint_path = out_dir / f"iter-{state['iter_num']:06d}-ckpt.pth"
-            checkpoint_path = out_dir / "latest.pth"
+            checkpoint_path = out_dir / "latest_cdlm_07.pth"
             fabric.print(f"Saving checkpoint to {str(checkpoint_path)!r}")
-            with fabric.strategy.state_dict_type(StateDictType.SHARDED_STATE_DICT):
-                fabric.save(checkpoint_path, state)
+            fabric.save(checkpoint_path, state)
+
 
 # learning rate decay scheduler (cosine with warmup)
 def get_lr(it):

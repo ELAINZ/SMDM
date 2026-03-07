@@ -1,6 +1,5 @@
 finetune/
-models/*
-out/*
-__pycache__/*
-workdir/*
-./.git/*
+models/
+out/
+__pycache__/
+workdir/

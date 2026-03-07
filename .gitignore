@@ -2,3 +2,4 @@ finetune/
 models/*
 out/*
 __pycache__/*
+workdir/*

@@ -3,3 +3,7 @@ models/
 out/
 __pycache__/
 workdir/
+correction_history/
+correction_results/
+git-lfs-3.2.0/
+refined_analysis_plots/

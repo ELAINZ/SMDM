@@ -27,12 +27,16 @@ more data and computation, such as 13B Llama-2 and 175B GPT-3.
 
 
 ## Dependency
-We can build the Anaconda environment based on [TinyLlama](https://github.com/jzhang38/TinyLlama/blob/main/PRETRAIN.md). First install the [TinyLlama](https://github.com/jzhang38/TinyLlama/blob/main/PRETRAIN.md) Anaconda environment and then run
+The repository now includes a ready-to-use Conda environment file:
+
 ```sh
-pip install lm-eval==0.4.4 numpy==1.25.0 bitsandbytes==0.43.1
-pip install openai==0.28 fschat==0.2.34 anthropic
+conda env create -f environment.yaml
+conda activate smdm
 ```
-In addition, we provide the conda installation commands in the [CONDA.md](CONDA.md) file for reference and completeness.
+
+This environment already includes the main packages used by the current codebase, including `torch`, `transformers`, `lightning`, `lm-eval`, `bitsandbytes`, `openai`, `fschat`, `anthropic`, and the math-correction utilities.
+
+If you prefer to build from the original TinyLlama setup, you can still start from the [TinyLlama](https://github.com/jzhang38/TinyLlama/blob/main/PRETRAIN.md) environment and install the extra dependencies used here. We also keep additional installation notes in [CONDA.md](CONDA.md).
 
 ## Pretrained models
 We provided all pretrained models on [Huggingface](https://huggingface.co/nieshen/SMDM), including those 
@@ -183,6 +187,138 @@ and put the `test.jsonl` into `./data/gsm8k`
 ```angular2html
 python evaluate_gsm8k.py --ckpt_path "models/mdm-1028M-3300e18-rsl-gsm8k.safetensors"
 ```
+
+### GSM8K correction / refinement
+The current repository also includes a GSM8K correction pipeline for refining failed or corrupted solutions. The workflow is:
+
+1. Generate buggy GSM8K solutions with injected number or symbol/operator errors.
+2. Evaluate the buggy JSONL with `eval_gsm8k_jsonl.py` to mark `test_passed`.
+3. Refine only failed samples with `refine_gsm8k.py`.
+4. Re-evaluate the refined outputs.
+5. Visualize the refined trajectories and remask behavior.
+
+#### 1. Generate buggy GSM8K data
+`mathcorrection/generate.py` creates corrupted GSM8K answers. The main modes are:
+
+- `--error_type number --propagate_numbers` for number propagation errors
+- `--error_type symbol` for operator / symbol errors
+
+Example:
+```sh
+python mathcorrection/generate.py \
+    --dataset gsm8k \
+    --error_type number \
+    --propagate_numbers \
+    --model_name yiheng0824/smdm/latest.pth \
+    --data_path mathcorrection \
+    --data_num 1 \
+    --n_replace 1 \
+    --skip_existing
+```
+
+This produces files such as:
+```text
+mathcorrection/gsm8k/latest.pth_number_propagate_1_wrong_1.jsonl
+```
+
+#### 2. Evaluate buggy samples
+Evaluate the generated JSONL first so failed examples are marked with `test_passed=False`:
+
+```sh
+python eval_gsm8k_jsonl.py \
+    --results_file mathcorrection/gsm8k/latest.pth_number_propagate_1_wrong_1.jsonl \
+    --dataset gsm8k \
+    --initial_dataset mathcorrection/gsm8k/latest.pth_number_propagate_1_wrong_1.jsonl
+```
+
+This writes:
+```text
+mathcorrection/gsm8k/latest.pth_number_propagate_1_wrong_1_evaluated.jsonl
+```
+
+#### 3. Refine failed samples
+The current refinement entry point is `refine_gsm8k.py`. By default it uses:
+
+- `--refine_mode two_stage`
+- `--refine_setting remove_all`
+- `--sampler_backend llada`
+
+Example:
+```sh
+torchrun --nproc_per_node=1 refine_gsm8k.py \
+    --initial_results_file mathcorrection/gsm8k/latest.pth_number_propagate_1_wrong_1_evaluated.jsonl \
+    --model_name yiheng0824/smdm/latest.pth \
+    --batch_size 1 \
+    --refined_steps 2 \
+    --algorithm self_conf-remask:vanilla \
+    --temperature 0.0 \
+    --refine_setting remove_all \
+    --refine_mode two_stage
+```
+
+Important current options:
+
+- `--sampler_backend llada|eval_diff`
+- `--eval_diff_mode generate|edit`
+- `--stage2_mode generate|edit`
+- `--add_correction_instruction`
+- `--skip_existing`
+
+The refinement code saves both JSONL outputs and per-step histories. The output directory structure is:
+
+```text
+correction_results/refined_steps{N}/{refine_setting}/{algorithm_with_temp}/{input_dir}/{input_stem}/
+correction_history/refined_steps{N}/{refine_setting}/{algorithm_with_temp}/{input_dir}/{input_stem}/
+```
+
+For the example above, the main refined file is:
+```text
+correction_results/refined_steps2/remove_all/self_conf-remask_vanilla_t00/mathcorrection/gsm8k/latest.pth_number_propagate_1_wrong_1_evaluated/latest.pth_number_propagate_1_wrong_1_evaluated_results_refined.jsonl
+```
+
+#### 4. Evaluate refined outputs
+Use the same evaluator on the refined JSONL:
+
+```sh
+python eval_gsm8k_jsonl.py \
+    --results_file correction_results/refined_steps2/remove_all/self_conf-remask_vanilla_t00/mathcorrection/gsm8k/latest.pth_number_propagate_1_wrong_1_evaluated/latest.pth_number_propagate_1_wrong_1_evaluated_results_refined.jsonl \
+    --dataset gsm8k \
+    --initial_dataset mathcorrection/gsm8k/latest.pth_number_propagate_1_wrong_1_evaluated.jsonl
+```
+
+This produces a companion `_evaluated.jsonl` file with `test_passed` and `error_message`.
+
+#### 5. Visualize refinement and remask trajectories
+To visualize a mix of passed and failed refined samples:
+
+```sh
+python visualize_passed_refined.py \
+    correction_results/refined_steps2/remove_all/self_conf-remask_vanilla_t00/mathcorrection/gsm8k/latest.pth_number_propagate_1_wrong_1_evaluated/latest.pth_number_propagate_1_wrong_1_evaluated_results_refined_evaluated.jsonl \
+    correction_history/refined_steps2/remove_all/self_conf-remask_vanilla_t00/mathcorrection/gsm8k/latest.pth_number_propagate_1_wrong_1_evaluated \
+    --mode both \
+    --model yiheng0824/smdm/latest.pth
+```
+
+This generates HTML files such as:
+
+- `refine_diff_passed.html`
+- `remask_passed.html`
+
+You can also call the lower-level visualizers directly:
+
+```sh
+python visualize_remask.py <history_dir> --evaluated-jsonl <refined_evaluated_jsonl>
+python visualize_refine_diff.py <refined_results_jsonl> <history_dir> --evaluated-jsonl <refined_evaluated_jsonl>
+```
+
+#### End-to-end test script
+For the full GSM8K correction workflow, see:
+
+```sh
+bash test_refine_gsm8k.sh
+```
+
+This script runs buggy-data generation, evaluation, refinement, refined evaluation, and visualization for a list of models and refinement step counts.
 
 
 ### Conditional generation

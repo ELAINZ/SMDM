@@ -15,24 +15,52 @@ if str(_ROOT) not in sys.path:
 from eval.math_normalization import normalize_final_answer, check_sympy_equivalence
 
 
+NUMBER_LIKE_RE = re.compile(
+    r"[+-]?(?:\d+(?:,\d{3})*|\d*\.\d+)(?:/\d+(?:\.\d+)?)?"
+)
+
+
+def extract_number_for_eval(text: str) -> str:
+    """
+    Robustly extract a number-like token for evaluation.
+    Priority:
+    1) first number-like token after the LAST '####'
+    2) first number-like token from full text
+    3) legacy first-whitespace-token fallback after LAST '####'
+    """
+    s = str(text).strip() if text else ""
+    if not s:
+        return ""
+
+    tail = s.rsplit("####", 1)[1] if "####" in s else s
+    m_tail = NUMBER_LIKE_RE.search(tail)
+    if m_tail:
+        return normalize_final_answer(m_tail.group(0).replace(",", ""))
+
+    m_all = NUMBER_LIKE_RE.search(s)
+    if m_all:
+        return normalize_final_answer(m_all.group(0).replace(",", ""))
+
+    # Legacy fallback (kept for compatibility with old outputs)
+    pattern = r"####\s*(.*)$"
+    preds = re.findall(pattern, s)
+    rest = preds[-1].strip() if preds else ""
+    tok = rest.split()[0].strip() if rest else ""
+    return normalize_final_answer(tok)
+
+
 def get_acc(pred, right_answer):
     """
     Extract number after last #### from pred and gt, normalize, then compare.
     gt may be full chain (<<...>> #### 18) or just the number ("18"); pred is refined_completion.
     """
-    pattern = r"####\s*(.*)$"
-    s = str(pred).strip() if pred else ""
-    preds = re.findall(pattern, s)
-    rest = preds[-1].strip() if preds else ""
-    pred_num = rest.split()[0].strip() if rest else ""
-    pred_num = normalize_final_answer(pred_num)
+    pred_num = extract_number_for_eval(pred)
 
     right_answer = str(right_answer).strip() if right_answer is not None else ""
     if "####" in right_answer:
-        gts = re.findall(pattern, right_answer)
-        rest = gts[-1].strip() if gts else right_answer
-        right_answer = rest.split()[0].strip() if rest else right_answer
-    gt_num = normalize_final_answer(right_answer)
+        gt_num = extract_number_for_eval(right_answer)
+    else:
+        gt_num = extract_number_for_eval(right_answer)
 
     # Numeric equivalence so 18 vs 18.0 and string vs int don't cause false fail
     try:

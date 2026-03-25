@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import List, Dict, Any
 from transformers import AutoTokenizer
 import difflib
+import re
 
 
 def load_results(results_jsonl: Path) -> Dict[str, Dict]:
@@ -252,15 +253,52 @@ def generate_diff_html(
             final_variable_tokens = initial_variable_tokens
         final_variable_strs_from_history = decode_tokens(tokenizer, final_variable_tokens)
 
-        # For GSM8K: compute diff from result strings so we compare actual content
-        # (history may have padding / different token alignment and show "all changed")
+        # For GSM8K: compute diff from *answer region* only so we don't treat question/instructions
+        # as part of the variable area. Older results may have refined_completion that still includes
+        # "Question:", "Buggy solution:", etc., so we aggressively strip them and keep only
+        # the reasoning/#### answer segment.
         refined_text = result.get('refined_completion', '')
         if is_gsm8k and refined_text:
+            def _extract_gsm8k_answer_region(text: str) -> str:
+                s = text or ""
+                if not s:
+                    return s
+                # Remove obvious prompt fragments if present
+                s = re.sub(
+                    r"Question:.*?(?=(Corrected solution:|<<|####|$))",
+                    " ",
+                    s,
+                    flags=re.IGNORECASE | re.DOTALL,
+                )
+                s = re.sub(
+                    r"Buggy solution:.*?(?=(Corrected solution:|<<|####|$))",
+                    " ",
+                    s,
+                    flags=re.IGNORECASE | re.DOTALL,
+                )
+                s = re.sub(r"Corrected solution:", " ", s, flags=re.IGNORECASE)
+                s = re.sub(r"\s+", " ", s).strip()
+                # If there's a prompt-style separator, keep the tail as answer region
+                if "||" in s:
+                    s = s.rsplit("||", 1)[-1].strip()
+                # Prefer full reasoning + #### answer when markers exist
+                if "<<" in s:
+                    s2 = s[s.find("<<") :].strip()
+                    if "####" in s2:
+                        return s2
+                    return s2
+                if "####" in s:
+                    return s[s.find("####") :].strip()
+                return s
+
             orig_ids = tokenize_code(tokenizer, original_code)
-            ref_ids = tokenize_code(tokenizer, refined_text)
+            refined_answer_text = _extract_gsm8k_answer_region(refined_text)
+            ref_ids = tokenize_code(tokenizer, refined_answer_text)
             original_variable_strs_for_diff = decode_tokens(tokenizer, orig_ids)
             final_variable_strs_for_diff = decode_tokens(tokenizer, ref_ids)
-            final_diff = compute_token_diff(original_variable_strs_for_diff, final_variable_strs_for_diff)
+            final_diff = compute_token_diff(
+                original_variable_strs_for_diff, final_variable_strs_for_diff
+            )
             final_variable_strs = final_variable_strs_for_diff
             original_variable_strs_display = original_variable_strs_for_diff
         else:

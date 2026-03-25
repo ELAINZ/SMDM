@@ -50,6 +50,45 @@ def decode_tokens(tokenizer, token_ids):
     return [tokenizer.decode([tid]) for tid in token_ids]
 
 
+def _is_pad_or_empty(tok_id, tok_str, pad_id, mask_id):
+    """True if token should be hidden (pad/mask/empty)."""
+    try:
+        tid = int(tok_id)
+    except (TypeError, ValueError):
+        tid = -1
+    if pad_id is not None and tid == pad_id:
+        return True
+    if mask_id is not None and tid == mask_id:
+        return True
+    if tid == 0:  # common pad id when tokenizer has no explicit pad
+        return True
+    if tok_str == "[PAD]":
+        return True
+    if isinstance(tok_str, str) and not tok_str.strip():
+        return True
+    return False
+
+
+def _trim_trailing_pad(step_dict, pad_id, mask_id):
+    """Trim trailing pad/mask/empty from token arrays in step_dict (in place)."""
+    tokens = step_dict.get("tokens", [])
+    token_ids = step_dict.get("token_ids", [])
+    n = len(tokens)
+    last_keep = -1
+    for i in range(n - 1, -1, -1):
+        s = tokens[i] if i < len(tokens) else ""
+        tid = token_ids[i] if i < len(token_ids) else -1
+        if not _is_pad_or_empty(tid, s, pad_id, mask_id):
+            last_keep = i
+            break
+    if last_keep < 0:
+        return
+    trim = last_keep + 1
+    for k in ("tokens", "token_ids", "confidence", "fix_mask", "remask_positions", "confidence_AR_ref"):
+        if k in step_dict and isinstance(step_dict[k], list) and len(step_dict[k]) > trim:
+            step_dict[k] = step_dict[k][:trim]
+
+
 def create_step_visualization(sample_history: Dict, step_idx: int, tokenizer) -> Dict:
     """Create visualization data for a single step."""
     prompt = sample_history['prompt']
@@ -207,7 +246,7 @@ def create_interactive_html(
         '',
         '    <script>',
         '        // Data embedded in JavaScript',
-        '        const data = ' + generate_js_data(histories, tokenizer, sample_ids) + ';',
+        '        const data = ' + generate_js_data(histories, tokenizer, sample_ids, pad_id=getattr(tokenizer, "pad_token_id", None), mask_id=getattr(tokenizer, "mask_token_id", None)) + ';',
         '        const taskIdToPassed = ' + json.dumps(task_id_to_passed or {}) + ';',
         '        ',
         '        let animationInterval = null;',
@@ -302,6 +341,21 @@ def create_interactive_html(
         '',
         '    Plotly.newPlot(\'errorStatsPlot\', traces, layout);',
         '};',
+        '        ',
+        '        function normalizeTokenText(token) {',
+        '            if (token === "\\n") return "\\\\n";',
+        '            if (token === "\\t") return "\\\\t";',
+        '            if (token === "\\r") return "\\\\r";',
+        '            return token;',
+        '        }',
+        '        ',
+        '        function escapeHtml(text) {',
+        '            return String(text)',
+        '                .replace(/&/g, "&amp;")',
+        '                .replace(/</g, "&lt;")',
+        '                .replace(/>/g, "&gt;")',
+        '                .replace(/"/g, "&quot;");',
+        '        }',
         '        function updateTokenDisplay(stepData, stepIdx, sample) {',
         '            const container = document.getElementById("tokenDisplay");',
         '            let html = "<div>";',
@@ -311,6 +365,15 @@ def create_interactive_html(
         '            const isLastStep = (stepIdx >= 0 && sample.steps && stepIdx === sample.num_steps - 1);',
         '            ',
         '            stepData.tokens.forEach((token, idx) => {',
+        '                const tokId = stepData.token_ids[idx];',
+        '                const tokenRaw = (token === null || token === undefined) ? "" : String(token);',
+        '                const tokenNorm = normalizeTokenText(tokenRaw);',
+        '                const tokenEsc = escapeHtml(tokenNorm);',
+        '                // Skip padding/mask/empty tokens to avoid noisy empty grids.',
+        '                const isSkipId = (data.skipTokenIds && data.skipTokenIds.indexOf(Number(tokId)) !== -1) || (data.padTokenId != null && tokId == data.padTokenId) || (data.maskTokenId != null && tokId == data.maskTokenId) || tokId == 0;',
+        '                const isEmpty = tokenNorm === "[PAD]" || tokenNorm === "" || !tokenNorm.trim();',
+        '                if (isSkipId || isEmpty) { return; }',
+        '                ',
         '                const isFixed = stepData.fix_mask[idx];',
         '                const isRemask = stepData.remask_positions[idx];',
         '                const conf = stepData.confidence[idx];',
@@ -320,7 +383,11 @@ def create_interactive_html(
         '                const isError = !isFixed && bodyIdx < contentLen && sample.error_positions && sample.error_positions.includes(bodyIdx);',
         '                const originalToken = isError && sample.error_original_tokens ? sample.error_original_tokens[sample.error_positions.indexOf(bodyIdx)] : null;',
         '                const initialToken = (sample.initial && sample.initial.tokens && idx < sample.initial.tokens.length) ? sample.initial.tokens[idx] : null;',
-        '                const isCorrected = isLastStep && isError && initialToken !== null && token !== initialToken;',
+        '                const initialTokenRaw = (initialToken === null || initialToken === undefined) ? null : String(initialToken);',
+        '                const initialTokenEsc = initialTokenRaw === null ? null : escapeHtml(normalizeTokenText(initialTokenRaw));',
+        '                const originalTokenRaw = (originalToken === null || originalToken === undefined) ? null : String(originalToken);',
+        '                const originalTokenEsc = originalTokenRaw === null ? null : escapeHtml(normalizeTokenText(originalTokenRaw));',
+        '                const isCorrected = isLastStep && isError && initialTokenRaw !== null && tokenRaw !== initialTokenRaw;',
         '                ',
         '                let className = isFixed ? "token-fixed" : "token-variable";',
         '                if (isRemask) className = "token-remask";',
@@ -340,22 +407,22 @@ def create_interactive_html(
         '                        </div>`;',
         '                    ',
         '                    // At last step show corrected as primary; otherwise show error (buggy)',
-        '                    if (isCorrected && initialToken !== null) {',
+        '                    if (isCorrected && initialTokenEsc !== null) {',
         '                        tooltipHTML += `<div class="tooltip-section" style="background: rgba(76, 175, 80, 0.2); padding: 8px; border-radius: 3px;">',
         '                            <div class="tooltip-label" style="color: #2e7d32;">✅ CORRECTED:</div>',
-        '                            <div class="tooltip-value">"${initialToken}" → "${token}"</div>',
+        '                            <div class="tooltip-value">"${initialTokenEsc}" → "${tokenEsc}"</div>',
         '                        </div>`;',
-        '                    } else if (isError && (originalToken !== undefined && originalToken !== null)) {',
+        '                    } else if (isError && (originalTokenEsc !== undefined && originalTokenEsc !== null)) {',
         '                        tooltipHTML += `<div class="tooltip-section" style="background: rgba(255, 152, 0, 0.2); padding: 8px; border-radius: 3px;">',
         '                            <div class="tooltip-label" style="color: #ff6f00;">⚠️ ERROR TOKEN (buggy):</div>',
-        '                            <div class="tooltip-value" style="color: #ff9800;">Current: "${token}"</div>',
-        '                            <div class="tooltip-value" style="color: #4CAF50;">Expected (correct): "${originalToken}"</div>',
+        '                            <div class="tooltip-value" style="color: #ff9800;">Current: "${tokenEsc}"</div>',
+        '                            <div class="tooltip-value" style="color: #4CAF50;">Expected (correct): "${originalTokenEsc}"</div>',
         '                        </div>`;',
         '                    }',
         '                    ',
         '                    tooltipHTML += `<div class="tooltip-section">',
         '                            <div class="tooltip-label">🎯 Current Step ${stepIdx + 1}:</div>',
-        '                            <div class="tooltip-value">Token: "${token}" (ID: ${stepData.token_ids[idx]})</div>',
+        '                            <div class="tooltip-value">Token: "${tokenEsc}" (ID: ${stepData.token_ids[idx]})</div>',
         '                            <div class="tooltip-value">Confidence: ${confStr}</div>`;',
         '                    if (hasARRef) {',
         '                        tooltipHTML += `<div class="tooltip-value">AR Ref Conf: ${confARRefStr}</div>`;',
@@ -367,22 +434,24 @@ def create_interactive_html(
         '                    if (stepIdx < sample.num_steps - 1) {',
         '                        const nextStep = sample.steps[stepIdx + 1];',
         '                        const nextToken = nextStep.tokens[idx];',
+        '                        const nextTokenRaw = (nextToken === null || nextToken === undefined) ? "" : String(nextToken);',
+        '                        const nextTokenEsc = escapeHtml(normalizeTokenText(nextTokenRaw));',
         '                        const nextTokenId = nextStep.token_ids[idx];',
         '                        const nextConf = nextStep.confidence[idx];',
         '                        const nextConfStr = nextConf === Infinity ? "∞" : nextConf.toFixed(4);',
         '                        const nextHasARRef = nextStep.confidence_AR_ref !== undefined;',
         '                        const nextConfARRefStr = nextHasARRef ? (nextStep.confidence_AR_ref[idx] === Infinity ? "∞" : nextStep.confidence_AR_ref[idx].toFixed(4)) : null;',
-        '                        const changed = nextToken !== token;',
+        '                        const changed = nextTokenRaw !== tokenRaw;',
         '                        ',
         '                        tooltipHTML += `<div class="tooltip-section">',
         '                            <div class="tooltip-label">➡️ Next Step ${stepIdx + 2}:</div>',
-        '                            <div class="tooltip-value">Token: "${nextToken}" (ID: ${nextTokenId})</div>',
+        '                            <div class="tooltip-value">Token: "${nextTokenEsc}" (ID: ${nextTokenId})</div>',
         '                            <div class="tooltip-value">Confidence: ${nextConfStr}</div>`;',
         '                        if (nextHasARRef) {',
         '                            tooltipHTML += `<div class="tooltip-value">AR Ref Conf: ${nextConfARRefStr}</div>`;',
         '                        }',
         '                        if (changed) {',
-        '                            tooltipHTML += `<div class="tooltip-value" style="color: #ff9800;">🔄 Changed from "${token}"</div>`;',
+        '                            tooltipHTML += `<div class="tooltip-value" style="color: #ff9800;">🔄 Changed from "${tokenEsc}"</div>`;',
         '                        } else {',
         '                            tooltipHTML += `<div class="tooltip-value" style="color: #4CAF50;">✓ Unchanged</div>`;',
         '                        }',
@@ -398,14 +467,14 @@ def create_interactive_html(
         '                        </div>',
         '                        <div class="tooltip-section">',
         '                            <div class="tooltip-value">🔒 Fixed (Prompt)</div>',
-        '                            <div class="tooltip-value">Token: "${token}" (ID: ${stepData.token_ids[idx]})</div>',
+        '                            <div class="tooltip-value">Token: "${tokenEsc}" (ID: ${stepData.token_ids[idx]})</div>',
         '                        </div>',
         '                    </div>`;',
         '                }',
         '                ',
         '                html += `<span class="token ${className}" ',
         '                    onmouseenter="showTooltip(${idx}, event)" ',
-        '                    onmouseleave="hideTooltip(${idx})">${token}${tooltipHTML}</span>`;',
+        '                    onmouseleave="hideTooltip(${idx})">${tokenEsc}${tooltipHTML}</span>`;',
         '            });',
         '            ',
         '            html += "</div>";',
@@ -626,10 +695,19 @@ def create_interactive_html(
     print(f"📊 Open in browser to explore {len(sample_ids)} samples")
 
 
-def generate_js_data(histories: List[Dict], tokenizer, sample_ids: List[int]) -> str:
-    """Generate JavaScript data structure."""
+def generate_js_data(histories: List[Dict], tokenizer, sample_ids: List[int], pad_id=None, mask_id=None) -> str:
+    """Generate JavaScript data structure. pad_id/mask_id: passed so frontend skips padding/mask tokens (avoids empty grids)."""
     import json
     
+    pad_id = getattr(tokenizer, "pad_token_id", None) if pad_id is None else pad_id
+    mask_id = getattr(tokenizer, "mask_token_id", None) if mask_id is None else mask_id
+    special_ids = set(int(x) for x in (getattr(tokenizer, "all_special_ids", []) or []))
+    skip_token_ids = [0]  # common pad
+    if pad_id is not None and pad_id not in skip_token_ids:
+        skip_token_ids.append(pad_id)
+    if mask_id is not None and mask_id not in skip_token_ids:
+        skip_token_ids.append(mask_id)
+    root = {"samples": None, "padTokenId": pad_id, "maskTokenId": mask_id, "skipTokenIds": skip_token_ids}
     samples_data = []
     
     for sample_id in sample_ids:
@@ -638,25 +716,32 @@ def generate_js_data(histories: List[Dict], tokenizer, sample_ids: List[int]) ->
         # Process initial state
         initial_tokens = sample['prompt']['tokens']
         fix_mask = sample['prompt']['fix_mask']
+        fix_list = fix_mask.tolist() if hasattr(fix_mask, "tolist") else fix_mask
+        num_fixed = sum(1 for x in fix_list if x)
+        num_variable = len(fix_list) - num_fixed
+        variable_content_length = sample.get('variable_content_length', None)
+        content_len = int(variable_content_length) if variable_content_length is not None else num_variable
+        content_len = max(0, min(content_len, num_variable))
+
         initial_data = {
             'tokens': decode_tokens(tokenizer, initial_tokens),
             'token_ids': initial_tokens.tolist(),
             'confidence': [float('inf')] * len(initial_tokens),
             'remask_positions': [False] * len(initial_tokens),
-            'fix_mask': fix_mask.tolist(),
+            'fix_mask': fix_list,
         }
-        
+
         # Process each step
         steps_data = []
         for step in sample['steps']:
             # Reconstruct full sequence
             tokens = initial_tokens.clone()
             tokens[~fix_mask] = step['x0_variable']
-            
+
             conf = torch.full_like(tokens, float('inf'), dtype=torch.float32)
             # Convert to float32 to match conf dtype (in case conf_variable is bfloat16)
             conf[~fix_mask] = step['conf_variable'].float()
-            
+
             step_data = {
                 'tokens': decode_tokens(tokenizer, tokens),
                 'token_ids': tokens.tolist(),
@@ -673,18 +758,80 @@ def generate_js_data(histories: List[Dict], tokenizer, sample_ids: List[int]) ->
                 # Convert to float32 to match conf_AR_ref dtype (in case conf_AR_ref_variable is bfloat16)
                 conf_AR_ref[~fix_mask] = step['conf_AR_ref_variable'].float()
                 step_data['confidence_AR_ref'] = [float(c) if c != float('inf') else float('inf') for c in conf_AR_ref.tolist()]
-            
+
             steps_data.append(step_data)
-        
+
+        def _hash_answer_end(step_dict: Dict[str, Any]) -> int:
+            """If step has ####, keep until first pad/empty after it. Return exclusive end index."""
+            tokens = step_dict.get("tokens", [])
+            token_ids = step_dict.get("token_ids", [])
+            last_hash_idx = -1
+            for i, tok in enumerate(tokens):
+                if tok == "####":
+                    last_hash_idx = i
+            if last_hash_idx < 0:
+                return 0
+            keep_end = last_hash_idx + 1
+            n = min(len(tokens), len(token_ids))
+            for i in range(last_hash_idx + 1, n):
+                tok = tokens[i]
+                tid = token_ids[i]
+                # Do NOT break on whitespace/empty decode pieces (they often appear before numbers).
+                # Only stop at true padding/mask/special tokens.
+                try:
+                    tid_int = int(tid)
+                except (TypeError, ValueError):
+                    tid_int = -1
+                if (pad_id is not None and tid_int == int(pad_id)) or (mask_id is not None and tid_int == int(mask_id)) or tid_int == 0 or tok == "[PAD]" or tid_int in special_ids:
+                    break
+                keep_end = i + 1
+            return keep_end
+
+        def _last_meaningful_idx(step_dict: Dict[str, Any]) -> int:
+            """Find last non-padding, non-special content token index."""
+            tokens = step_dict.get("tokens", [])
+            token_ids = step_dict.get("token_ids", [])
+            n = min(len(tokens), len(token_ids))
+            for i in range(n - 1, -1, -1):
+                tok = tokens[i]
+                tid = token_ids[i]
+                if _is_pad_or_empty(tid, tok, pad_id, mask_id):
+                    continue
+                try:
+                    tid_int = int(tid)
+                except (TypeError, ValueError):
+                    tid_int = -1
+                if tid_int in special_ids:
+                    continue
+                return i
+            return -1
+
+        # Keep full meaningful content across all steps; only trim trailing junk.
+        max_last_idx = _last_meaningful_idx(initial_data)
+        for step_data in steps_data:
+            max_last_idx = max(max_last_idx, _last_meaningful_idx(step_data))
+        trim_len = max_last_idx + 1 if max_last_idx >= 0 else len(initial_data["tokens"])
+        trim_len = max(trim_len, num_fixed)
+        hash_keep_len = _hash_answer_end(initial_data)
+        for step_data in steps_data:
+            hash_keep_len = max(hash_keep_len, _hash_answer_end(step_data))
+        if hash_keep_len > 0:
+            trim_len = max(trim_len, hash_keep_len)
+
+        def _trim_to_len(step_dict: Dict[str, Any], target_len: int) -> None:
+            for k in ("tokens", "token_ids", "confidence", "fix_mask", "remask_positions", "confidence_AR_ref"):
+                if k in step_dict and isinstance(step_dict[k], list) and len(step_dict[k]) > target_len:
+                    step_dict[k] = step_dict[k][:target_len]
+
+        _trim_to_len(initial_data, trim_len)
+        for step_data in steps_data:
+            _trim_to_len(step_data, trim_len)
+
         # Get task_id and error information from history if available
         task_id = sample.get('task_id', None)
         raw_error_positions = sample.get('error_positions', [])
         raw_error_original_tokens = sample.get('error_original_tokens', [])
-        variable_content_length = sample.get('variable_content_length', None)
         # Ensure list of int; clamp to variable length so pad positions are never marked error
-        fix_list = fix_mask.tolist() if hasattr(fix_mask, 'tolist') else fix_mask
-        num_variable = len(fix_list) - sum(1 for x in fix_list if x)
-        content_len = int(variable_content_length) if variable_content_length is not None else num_variable
         raw_orig = list(raw_error_original_tokens)
         kept = []
         for pi, p in enumerate(raw_error_positions):
@@ -705,7 +852,8 @@ def generate_js_data(histories: List[Dict], tokenizer, sample_ids: List[int]) ->
             'variable_content_length': variable_content_length,
         })
     
-    return json.dumps({'samples': samples_data}, ensure_ascii=False)
+    root["samples"] = samples_data
+    return json.dumps(root, ensure_ascii=False)
 
 
 def main():
